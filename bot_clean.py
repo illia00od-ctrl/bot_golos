@@ -311,7 +311,7 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if mode == TICKET_MODE_ONE_SHOT_USERNAME:
         taken_footer = (
-            "\n\n✅ <b>Ви взяли це звернення.</b> Відповідь клієнту — лише через «Відповісти» на це повідомлення."
+            "\n\n"
         )
         for aid, mid in admin_msgs.items():
             try:
@@ -354,8 +354,8 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     }
 
     taken_footer = (
-        f"\n\n✅ <b>Ви взяли це звернення.</b> Відповідайте клієнту через «Відповісти» на це повідомлення "
-        f"або на наступні від бота в цьому чаті."
+        f"\n\n✅ <b>Ви взяли це звернення.</b>"
+        f""
     )
     for aid, mid in admin_msgs.items():
         try:
@@ -384,8 +384,7 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         await context.bot.send_message(
             chat_id=client_id,
-            text="Ваше звернення прийняв адміністратор. Ви можете писати повідомлення — їх отримає саме він. "
-            "Завершити розмову: кнопка «Завершити звернення», /завершити або /finish.",
+            text="Ваше звернення прийнято",
             reply_markup=end_only_keyboard(ticket_id),
         )
         await context.bot.send_message(chat_id=client_id, text="Меню:", reply_markup=markup_main)
@@ -438,7 +437,7 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 await context.bot.send_message(
                     chat_id=client_id,
-                    text="Адміністратор завершив звернення до того, як його було призначено. За потреби надішліть нове через меню.",
+                    text="",
                     reply_markup=markup_main,
                 )
         except Exception as e:
@@ -463,7 +462,7 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if assigned_admin:
                 await context.bot.send_message(
                     chat_id=assigned_admin,
-                    text="Клієнт натиснув «Завершити звернення». Діалог у цьому тикеті закрито.",
+                    text="Клієнт натиснув «Завершити звернення». Діалог у цьому зверненні закрито.",
                 )
             await context.bot.send_message(
                 chat_id=client_id,
