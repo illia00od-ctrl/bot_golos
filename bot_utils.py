@@ -7,15 +7,6 @@ import html
 import re
 from typing import Any, MutableMapping, Optional
 
-# Підписи inline-кнопок (узгоджено з UX)
-BTN_INLINE_TAKE = "Взяти звернення"
-BTN_INLINE_END = "Завершити звернення"
-
-# Режими звернення (pending + claim)
-TICKET_MODE_ONE_SHOT_USERNAME = "one_shot_username"  # є @username, заявка за темою — лише «Взяти»
-TICKET_MODE_AUTO_CLAIM = "auto_claim"  # без @username (заявка за темою) або live без username — без кнопок, перший Reply адміна
-TICKET_MODE_THREADED = "threaded"  # лише «Зв'язатися з адміністратором» при наявному @username — кнопки Взяти/Завершити
-
 # Мінімальна довжина тексту звернення (символів після strip)
 MIN_APPEAL_TEXT_LENGTH = 15
 
@@ -38,7 +29,6 @@ FLOW_IDLE = ""
 FLOW_TICKET_TEXT = "ticket_text"
 FLOW_TICKET_PHONE = "ticket_phone"
 FLOW_TICKET_PHONE_CONFIRM = "ticket_phone_confirm"
-FLOW_LIVE_REQUEST = "live_request"
 
 # --- Ключі user_data ---
 KEY_FLOW = "flow"
@@ -47,13 +37,12 @@ KEY_TICKET_DRAFT = "ticket_draft"
 # --- Ключ bot_data ---
 KEY_ADMIN_POST_TO_USER = "admin_post_to_user"  # legacy (група): message_id -> user_id
 KEY_RELAY_PRIVATE = "relay_private"  # "admin_id:message_id" -> client_user_id
-KEY_PENDING_TICKETS = "pending_tickets"  # ticket_id -> { client_id, admin_msgs: {admin_id: msg_id} }
-KEY_SUPPORT_SESSIONS = "support_sessions"  # client_user_id -> { admin_id, ticket_id }
+KEY_PENDING_TICKETS = "pending_tickets"  # ticket_id -> { client_id, admin_msgs, group_notify?, ... }
+KEY_PENDING_GROUP_NOTIFY = "group_notify"  # (chat_id, message_id) — копія заявки в групі (лише інфо)
 
 # --- Кнопки (узгоджені між обробниками) ---
 BTN_CANCEL_FLOW = "❌ Скасувати заявку"
 BTN_SHARE_CONTACT_LABEL = "📱 Надіслати свій номер"
-BTN_LIVE_ADMIN = "Зв'язатися з адміністратором"
 
 SERVICES_LIST = [
     "Психологічний супровід",
@@ -83,7 +72,6 @@ MENU_LABELS = frozenset(
         "Настільний теніс",
         "Стрільба з лука",
         "Піклбол",
-        BTN_LIVE_ADMIN,
         BTN_CANCEL_FLOW,
         *SERVICES_LIST,
     }
@@ -179,26 +167,11 @@ def build_ticket_admin_html(
     parts.extend(
         [
             "",
-            "",
+            "📋 Зв'яжіться з клієнтом за контактами в блоці вище (@username, телефон у заявці або посилання tg://user…). "
+            "Переписка через цього бота не ведеться.",
         ]
     )
     return "\n".join(parts)
-
-
-def build_live_request_admin_html(
-    user_id: int,
-    full_name: str,
-    username: Optional[str],
-    body: str,
-) -> str:
-    user_block = format_user_line_html(user_id, full_name, username)
-    body_esc = escape_html(body)
-    return (
-        f"💬 <b>ЗВЕРНЕННЯ ДО АДМІНІСТРАТОРА</b>\n\n"
-        f"{user_block}\n\n"
-        f"📝 <b>Текст звернення:</b>\n{body_esc}\n\n"
-        f""
-    )
 
 
 def relay_bind_admin_message(
@@ -230,18 +203,3 @@ def register_ticket_admin_post(
     return build_ticket_admin_html(
         category, user_id, full_name, username, body, phone
     )
-
-
-def register_live_request_admin_post(
-    bot_data: MutableMapping[str, Any],
-    admin_message_id: int,
-    *,
-    relay_admin_id: int,
-    user_id: int,
-    full_name: str,
-    username: Optional[str],
-    body: str,
-) -> str:
-    """Аналог register_ticket_admin_post для запиту «зв'язатися з адміністратором»."""
-    relay_bind_private(bot_data, relay_admin_id, admin_message_id, user_id)
-    return build_live_request_admin_html(user_id, full_name, username, body)

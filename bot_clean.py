@@ -1,34 +1,9 @@
 import logging
-import os
 import smtplib
-from pathlib import Path
-
-_env_file = Path(__file__).resolve().parent / ".env"
-if _env_file.is_file():
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(_env_file)
-        if _env_file.stat().st_size == 0:
-            import sys
-
-            print(
-                "Увага: файл .env порожній на диску — збережіть його в редакторі (Ctrl/Cmd+S).",
-                file=sys.stderr,
-            )
-    except ImportError:
-        import warnings
-
-        warnings.warn(
-            "Знайдено .env — встановіть python-dotenv (pip install python-dotenv), інакше змінні з файлу не завантажаться.",
-            stacklevel=1,
-        )
 from email.mime.text import MIMEText
 from secrets import token_hex
 
 from telegram import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
@@ -36,61 +11,79 @@ from telegram import (
 )
 from telegram.ext import (
     ApplicationBuilder,
-    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
 
+from bot_config import BotConfig, admin_delivery_configured, build_config
 from bot_utils import (
     BTN_CANCEL_FLOW,
-    BTN_INLINE_END,
-    BTN_INLINE_TAKE,
-    BTN_LIVE_ADMIN,
     BTN_SHARE_CONTACT_LABEL,
     KEY_FLOW,
+    KEY_PENDING_GROUP_NOTIFY,
     KEY_PENDING_TICKETS,
-    KEY_RELAY_PRIVATE,
-    KEY_SUPPORT_SESSIONS,
     KEY_TICKET_DRAFT,
-    TICKET_MODE_AUTO_CLAIM,
-    TICKET_MODE_ONE_SHOT_USERNAME,
-    TICKET_MODE_THREADED,
     FLOW_IDLE,
-    FLOW_LIVE_REQUEST,
     FLOW_TICKET_PHONE,
     FLOW_TICKET_PHONE_CONFIRM,
     FLOW_TICKET_TEXT,
     MENU_LABELS,
     MIN_APPEAL_TEXT_LENGTH,
     SERVICES_LIST,
-    build_live_request_admin_html,
     build_ticket_admin_html,
     escape_html,
     is_appeal_text_valid,
     is_confirm_no,
     is_confirm_yes,
-    parse_admin_user_ids,
-    relay_bind_private,
-    relay_private_key,
     validate_ua_phone,
 )
 
-# --- КОНФИГУРАЦИЯ ---
-BOT_TOKEN = '8283530471:AAFsFFhFB9gfzGKVbZztDIYe9sDsOGWsBEg'
-TARGET_CHAT_ID = '-1003791029029'  # ID чата, куда бот будет пересылать сообщения
-try:
-    ADMIN_CHAT_ID = int(TARGET_CHAT_ID)
-except ValueError:
-    ADMIN_CHAT_ID = 0
+# --- Конфігурація (з bot_config: .env завантажується там) ---
+_CFG: BotConfig = build_config()
+BOT_TOKEN = _CFG.bot_token
+ADMIN_USER_IDS: list[int] = list(_CFG.admin_user_ids)
+ADMIN_CHAT_ID = _CFG.admin_chat_id
+SMTP_SERVER = _CFG.smtp_server
+SMTP_PORT = _CFG.smtp_port
+SMTP_USER = _CFG.smtp_user
+SMTP_PASSWORD = _CFG.smtp_password
 
-ADMIN_USER_IDS = parse_admin_user_ids(os.environ.get("ADMIN_USER_IDS", ""))
 
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+def _admin_delivery_configured() -> bool:
+    return admin_delivery_configured(_CFG)
+
+
+# Текст додається лише до повідомлення в групі: без кнопок і без relay з групи.
+GROUP_TICKET_INFO_FOOTER = (
+    "\n\n<i>ℹ️ Зв'яжіться з клієнтом через @username, "
+    "номер телефону в заявці або посилання «tg://user…» у блоці вище. "
+    "</i>"
+)
+
+
+async def _edit_group_notify_copy(
+    context: ContextTypes.DEFAULT_TYPE,
+    group_notify: tuple[int, int] | None,
+    *,
+    full_html: str,
+) -> None:
+    """Оновлює дзеркало заявки в групі (якщо було надіслано)."""
+    if not group_notify:
+        return
+    g_chat, g_mid = group_notify
+    try:
+        await context.bot.edit_message_text(
+            chat_id=g_chat,
+            message_id=g_mid,
+            text=full_html,
+            parse_mode="HTML",
+            reply_markup=None,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        logger.warning("Не вдалося оновити групове повідомлення %s/%s: %s", g_chat, g_mid, e)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -135,7 +128,6 @@ keyboard_main = [
     [KeyboardButton("Адаптивний спорт"), KeyboardButton("Психологічний супровід")],
     [KeyboardButton("Реабілітація та мед супровід"), KeyboardButton("Знижки для захисників в місті Одеса")],
     [KeyboardButton("Інше")],
-    # [KeyboardButton(BTN_LIVE_ADMIN)],
 ]
 markup_main = ReplyKeyboardMarkup(keyboard_main, resize_keyboard=True)
 
@@ -164,25 +156,12 @@ markup_phone = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-
-def ticket_inline_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(BTN_INLINE_TAKE, callback_data=f"claim:{ticket_id}")],
-            [InlineKeyboardButton(BTN_INLINE_END, callback_data=f"close:{ticket_id}")],
-        ]
-    )
-
-
-def take_only_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
-    """Лише «Взяти» — для заявки за темою з @username."""
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(BTN_INLINE_TAKE, callback_data=f"claim:{ticket_id}")]]
-    )
-
-
-def end_only_keyboard(ticket_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_INLINE_END, callback_data=f"close:{ticket_id}")]])
+# Текст клієнту після успішної відправки (зв'язок лише поза ботом — за контактами в заявці)
+_CLIENT_CONTACT_AFTER_SUBMIT = (
+    "З вами зв'яжуться самостійно за Вашими контактами з заявки"
+    ""
+)
+CLIENT_TICKET_SENT_MESSAGE = "Дякуємо! Заявку передано адміністраторам.\n\n" + _CLIENT_CONTACT_AFTER_SUBMIT
 
 
 def send_email(subject, body, to_email):
@@ -211,284 +190,53 @@ def current_flow(context: ContextTypes.DEFAULT_TYPE) -> str:
     return context.user_data.get(KEY_FLOW) or FLOW_IDLE
 
 
-def find_session_by_ticket(bot_data: dict, ticket_id: str) -> tuple[int | None, dict | None]:
-    sessions: dict = bot_data.get(KEY_SUPPORT_SESSIONS, {})
-    for client_id, data in list(sessions.items()):
-        if isinstance(data, dict) and data.get("ticket_id") == ticket_id:
-            return int(client_id), data
-    return None, None
-
-
 async def broadcast_ticket_to_admins(
     context: ContextTypes.DEFAULT_TYPE,
     *,
     ticket_id: str,
     html_text: str,
     client_id: int,
-    ticket_mode: str,
 ) -> bool:
     pending = context.bot_data.setdefault(KEY_PENDING_TICKETS, {})
     admin_msgs: dict[int, int] = {}
-    if ticket_mode == TICKET_MODE_ONE_SHOT_USERNAME:
-        kb = take_only_keyboard(ticket_id)
-    elif ticket_mode == TICKET_MODE_AUTO_CLAIM:
-        kb = None
-    else:
-        kb = ticket_inline_keyboard(ticket_id)
-    targets = list(ADMIN_USER_IDS)
-    if ADMIN_CHAT_ID:
-        targets.append(ADMIN_CHAT_ID)
-    for target in targets:
+    for aid in ADMIN_USER_IDS:
         try:
             m = await context.bot.send_message(
-                chat_id=target,
+                chat_id=aid,
                 text=html_text,
                 parse_mode="HTML",
-                reply_markup=kb,
+                reply_markup=None,
                 disable_web_page_preview=True,
             )
-            admin_msgs[target] = m.message_id
+            admin_msgs[aid] = m.message_id
         except Exception as e:
-            logger.warning("Не вдалося надіслати звернення адміну %s: %s", target, e)
-    if not admin_msgs:
+            logger.warning("Не вдалося надіслати звернення адміну %s: %s", aid, e)
+    group_notify: tuple[int, int] | None = None
+    if ADMIN_CHAT_ID:
+        try:
+            m = await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=html_text + GROUP_TICKET_INFO_FOOTER,
+                parse_mode="HTML",
+                reply_markup=None,
+                disable_web_page_preview=True,
+            )
+            group_notify = (ADMIN_CHAT_ID, m.message_id)
+        except Exception as e:
+            logger.warning("Не вдалося надіслати копію заявки в групу %s: %s", ADMIN_CHAT_ID, e)
+    if not admin_msgs and not group_notify:
         return False
     pending[ticket_id] = {
         "client_id": client_id,
         "admin_msgs": admin_msgs,
         "html": html_text,
-        "mode": ticket_mode,
+        KEY_PENDING_GROUP_NOTIFY: group_notify,
     }
     return True
 
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    if not q or not q.data:
-        return
-    data = q.data
-    if data.startswith("claim:"):
-        await handle_claim(update, context)
-    elif data.startswith("close:"):
-        await handle_close(update, context)
-    else:
-        await q.answer()
-
-
-async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    if not q or not q.data:
-        return
-    ticket_id = q.data.split(":", 1)[1]
-    is_admin = q.from_user.id in ADMIN_USER_IDS
-    is_in_admin_chat = q.message and q.message.chat_id == ADMIN_CHAT_ID
-    if not is_admin and not is_in_admin_chat:
-        await q.answer("Доступ лише для адміністраторів або учасників робочої групи.", show_alert=True)
-        return
-    pending_map: dict = context.bot_data.get(KEY_PENDING_TICKETS, {})
-    entry = pending_map.get(ticket_id)
-    if not entry:
-        await q.answer("Це звернення вже недійсне або взято іншим адміністратором.", show_alert=True)
-        return
-    client_id = entry["client_id"]
-    admin_msgs: dict[int, int] = entry["admin_msgs"]
-    html_text = entry["html"]
-    mode = entry.get("mode", TICKET_MODE_THREADED)
-    taker_id = q.from_user.id
-
-    recipient_chat_id = q.message.chat.id
-    if recipient_chat_id not in admin_msgs:
-        await q.answer("Це звернення не належить цьому чату або не отримано вами.", show_alert=True)
-        return
-
-    if mode == TICKET_MODE_AUTO_CLAIM:
-        await q.answer(
-            "Це звернення без кнопок: натисніть «Відповісти» на пост із заявкою, щоб взяти його в роботу.",
-            show_alert=True,
-        )
-        return
-
-    del pending_map[ticket_id]
-    winner_mid = admin_msgs[recipient_chat_id]
-    relay_bind_private(context.bot_data, taker_id, winner_mid, client_id)
-
-    if mode == TICKET_MODE_ONE_SHOT_USERNAME:
-        taken_footer = (
-            "\n\n"
-        )
-        for aid, mid in admin_msgs.items():
-            try:
-                if aid == taker_id:
-                    await context.bot.edit_message_text(
-                        chat_id=aid,
-                        message_id=mid,
-                        text=html_text + taken_footer,
-                        parse_mode="HTML",
-                        reply_markup=None,
-                        disable_web_page_preview=True,
-                    )
-                else:
-                    await context.bot.edit_message_text(
-                        chat_id=aid,
-                        message_id=mid,
-                        text=html_text + "\n\n<i>Звернення взято іншим адміністратором.</i>",
-                        parse_mode="HTML",
-                        reply_markup=None,
-                        disable_web_page_preview=True,
-                    )
-            except Exception as e:
-                logger.warning("Не вдалося оновити повідомлення %s/%s: %s", aid, mid, e)
-        await q.answer("Звернення призначено вам.")
-        try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Вашу заявку прийняв адміністратор. Відповідь буде в цьому чаті з ботом.",
-            )
-            await context.bot.send_message(chat_id=client_id, text="Користуйтеся меню нижче:", reply_markup=markup_main)
-        except Exception as e:
-            logger.exception("Повідомлення клієнту після claim: %s", e)
-        return
-
-    sessions = context.bot_data.setdefault(KEY_SUPPORT_SESSIONS, {})
-    sessions[client_id] = {
-        "admin_id": taker_id,
-        "ticket_id": ticket_id,
-        "thread_with_buttons": True,
-    }
-
-    taken_footer = (
-        f"\n\n✅ <b>Ви взяли це звернення.</b>"
-        f""
-    )
-    for aid, mid in admin_msgs.items():
-        try:
-            if aid == taker_id:
-                await context.bot.edit_message_text(
-                    chat_id=aid,
-                    message_id=mid,
-                    text=html_text + taken_footer,
-                    parse_mode="HTML",
-                    reply_markup=end_only_keyboard(ticket_id),
-                    disable_web_page_preview=True,
-                )
-            else:
-                await context.bot.edit_message_text(
-                    chat_id=aid,
-                    message_id=mid,
-                    text=html_text + "\n\n<i>Звернення взято іншим адміністратором. Дії не потрібні.</i>",
-                    parse_mode="HTML",
-                    reply_markup=None,
-                    disable_web_page_preview=True,
-                )
-        except Exception as e:
-            logger.warning("Не вдалося оновити повідомлення %s/%s: %s", aid, mid, e)
-
-    await q.answer("Звернення призначено вам.")
-    try:
-        await context.bot.send_message(
-            chat_id=client_id,
-            text="Ваше звернення прийнято",
-            reply_markup=end_only_keyboard(ticket_id),
-        )
-        await context.bot.send_message(chat_id=client_id, text="Меню:", reply_markup=markup_main)
-    except Exception as e:
-        logger.exception("Повідомлення клієнту після claim: %s", e)
-
-
-async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    q = update.callback_query
-    if not q or not q.data:
-        return
-    ticket_id = q.data.split(":", 1)[1]
-    uid = q.from_user.id
-    pending_map: dict = context.bot_data.get(KEY_PENDING_TICKETS, {})
-    sessions: dict = context.bot_data.setdefault(KEY_SUPPORT_SESSIONS, {})
-
-    entry = pending_map.get(ticket_id)
-    client_id: int | None = None
-    assigned_admin: int | None = None
-
-    if entry:
-        client_id = entry["client_id"]
-        admin_msgs = entry["admin_msgs"]
-        html_text = entry["html"]
-        is_admin = uid in ADMIN_USER_IDS
-        is_in_admin_chat = q.message and q.message.chat_id == ADMIN_CHAT_ID
-        if uid != client_id and not is_admin and not is_in_admin_chat:
-            await q.answer("Немає прав завершити це звернення.", show_alert=True)
-            return
-        del pending_map[ticket_id]
-        done = "\n\n<i>Звернення завершено.</i>"
-        for aid, mid in admin_msgs.items():
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=aid,
-                    message_id=mid,
-                    text=html_text + done,
-                    parse_mode="HTML",
-                    reply_markup=None,
-                    disable_web_page_preview=True,
-                )
-            except Exception as e:
-                logger.warning("Редагування після close: %s", e)
-        await q.answer("Звернення завершено.")
-        try:
-            if uid == client_id:
-                for aid in admin_msgs:
-                    await context.bot.send_message(
-                        chat_id=aid,
-                        text="Клієнт завершив звернення (ще до призначення адміністратора).",
-                    )
-            else:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text="",
-                    reply_markup=markup_main,
-                )
-        except Exception as e:
-            logger.warning("Сповіщення після close (pending): %s", e)
-        return
-
-    c_id, sess = find_session_by_ticket(context.bot_data, ticket_id)
-    if c_id is None or not sess:
-        await q.answer("Це звернення вже закрите або недійсне.", show_alert=True)
-        return
-    client_id = c_id
-    assigned_admin = sess.get("admin_id")
-    if uid != client_id and uid != assigned_admin:
-        await q.answer("Завершити може лише клієнт або адміністратор, який взяв звернення.", show_alert=True)
-        return
-
-    sessions.pop(client_id, None)
-    await q.answer("Звернення завершено.")
-
-    if uid == client_id:
-        try:
-            if assigned_admin:
-                await context.bot.send_message(
-                    chat_id=assigned_admin,
-                    text="Клієнт натиснув «Завершити звернення». Діалог у цьому зверненні закрито.",
-                )
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Звернення завершено. За потреби створіть нове через меню.",
-                reply_markup=markup_main,
-            )
-        except Exception as e:
-            logger.exception("Після close (клієнт): %s", e)
-    else:
-        try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="Адміністратор завершив звернення. За потреби ви можете надіслати нове через меню.",
-                reply_markup=markup_main,
-            )
-        except Exception as e:
-            logger.exception("Після close (адмін): %s", e)
-
 
 def _client_has_open_support(context: ContextTypes.DEFAULT_TYPE, client_id: int) -> bool:
-    if client_id in context.bot_data.get(KEY_SUPPORT_SESSIONS, {}):
-        return True
     for e in context.bot_data.get(KEY_PENDING_TICKETS, {}).values():
         if isinstance(e, dict) and e.get("client_id") == client_id:
             return True
@@ -503,15 +251,14 @@ async def finalize_ticket(
     user = update.effective_user
     if user and _client_has_open_support(context, user.id):
         await update.effective_message.reply_text(
-            "У вас уже є активне звернення або заявка в очікуванні. Завершіть його командою /завершити або /finish "
-            "(або кнопкою «Завершити звернення», якщо вона є), /cancel, або дочекайтеся відповіді адміністратора.",
+            "У вас уже є заявка в очікуванні. Скасуйте її: /завершити або /finish, або /cancel — і надішліть нову.",
             reply_markup=markup_main,
         )
         return
-    if not ADMIN_USER_IDS:
+    if not _admin_delivery_configured():
         clear_flow(context)
         await update.effective_message.reply_text(
-            "Неможливо доставити звернення: не налаштовано список адміністраторів (ADMIN_USER_IDS). "
+            "Неможливо доставити звернення."
             "Зверніться до підтримки сервісу.",
             reply_markup=markup_main,
         )
@@ -530,14 +277,12 @@ async def finalize_ticket(
         body,
         phone,
     )
-    ticket_mode = TICKET_MODE_ONE_SHOT_USERNAME if user.username else TICKET_MODE_AUTO_CLAIM
     try:
         ok = await broadcast_ticket_to_admins(
             context,
             ticket_id=ticket_id,
             html_text=html_text,
             client_id=user.id,
-            ticket_mode=ticket_mode,
         )
         if not ok:
             raise RuntimeError("no admin reachable")
@@ -550,86 +295,18 @@ async def finalize_ticket(
         return
 
     clear_flow(context)
-    thanks = (
-        "Дякуємо! Заявку отримано й передано адміністраторам.\n\n"
-    )
-    if ticket_mode == TICKET_MODE_ONE_SHOT_USERNAME:
-        await update.effective_message.reply_text(thanks)
-    else:
-        await update.effective_message.reply_text(
-            thanks + "\n\n",
-        )
-    await context.bot.send_message(user.id, "Користуйтеся меню нижче:", reply_markup=markup_main)
-
-
-async def finalize_live_request(update: Update, context: ContextTypes.DEFAULT_TYPE, body: str) -> None:
-    user = update.effective_user
-    if user and _client_has_open_support(context, user.id):
-        await update.effective_message.reply_text(
-            "У вас уже є активне звернення або заявка в очікуванні. Завершіть попереднє: натисніть команду /finish ",
-            reply_markup=markup_main,
-        )
-        return
-    if not ADMIN_USER_IDS:
-        clear_flow(context)
-        await update.effective_message.reply_text(
-            "Неможливо надіслати запит: не налаштовано ADMIN_USER_IDS.",
-            reply_markup=markup_main,
-        )
-        return
-    if not user:
-        return
-    ticket_id = token_hex(8)
-    html_text = build_live_request_admin_html(
-        user.id,
-        user.full_name or "",
-        user.username,
-        body,
-    )
-    live_mode = TICKET_MODE_THREADED if user.username else TICKET_MODE_AUTO_CLAIM
-    try:
-        ok = await broadcast_ticket_to_admins(
-            context,
-            ticket_id=ticket_id,
-            html_text=html_text,
-            client_id=user.id,
-            ticket_mode=live_mode,
-        )
-        if not ok:
-            raise RuntimeError("no admin reachable")
-    except Exception as e:
-        logger.exception("Не вдалося надіслати запит: %s", e)
-        await update.effective_message.reply_text(
-            "Не вдалося надіслати запит. Спробуйте ще раз за кілька хвилин.",
-            reply_markup=markup_main,
-        )
-        return
-
-    clear_flow(context)
-    if live_mode == TICKET_MODE_THREADED:
-        await update.effective_message.reply_text(
-            "Запит передано адміністраторам.\n\n",
-            reply_markup=end_only_keyboard(ticket_id),
-        )
-    else:
-        await update.effective_message.reply_text(
-            "Запит передано адміністраторам.\n\n"
-            "",
-        )
+    await update.effective_message.reply_text(CLIENT_TICKET_SENT_MESSAGE)
     await context.bot.send_message(user.id, "Користуйтеся меню нижче:", reply_markup=markup_main)
 
 
 async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Скидає очікування / діалог (клієнт або адмін)."""
+    """Скидає очікування заявки (клієнт) або пояснює адміну, що діалогу через бота немає."""
     uid = update.effective_user.id
     if not update.message:
         return
     pending_map: dict = context.bot_data.setdefault(KEY_PENDING_TICKETS, {})
-    sessions: dict = context.bot_data.setdefault(KEY_SUPPORT_SESSIONS, {})
 
-    is_admin = uid in ADMIN_USER_IDS
-    is_in_admin_chat = update.effective_chat.id == ADMIN_CHAT_ID
-    if not is_admin and not is_in_admin_chat:
+    if uid not in ADMIN_USER_IDS:
         removed_pending = [
             tid for tid, e in list(pending_map.items()) if isinstance(e, dict) and e.get("client_id") == uid
         ]
@@ -637,63 +314,40 @@ async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE)
             entry = pending_map.pop(tid, None)
             if entry:
                 html_text = entry.get("html", "")
+                cancel_suffix = "\n\n<i>Звернення скасовано клієнтом (/завершити або /finish).</i>"
                 for aid, mid in entry.get("admin_msgs", {}).items():
                     try:
                         await context.bot.edit_message_text(
                             chat_id=aid,
                             message_id=mid,
-                            text=html_text + "\n\n",
+                            text=html_text + cancel_suffix,
                             parse_mode="HTML",
                             reply_markup=None,
                             disable_web_page_preview=True,
                         )
                     except Exception as e:
                         logger.warning("edit after /finish: %s", e)
+                await _edit_group_notify_copy(
+                    context,
+                    entry.get(KEY_PENDING_GROUP_NOTIFY),
+                    full_html=html_text + GROUP_TICKET_INFO_FOOTER + cancel_suffix,
+                )
                 for aid in entry.get("admin_msgs", {}):
                     try:
                         await context.bot.send_message(
                             chat_id=aid,
-                            text=".",
+                            text="Клієнт скасував очікування звернення (/завершити або /finish).",
                         )
                     except Exception as e:
                         logger.warning("notify admin: %s", e)
-        sess = sessions.pop(uid, None)
-        if sess:
-            aid = sess.get("admin_id")
-            if aid:
-                try:
-                    await context.bot.send_message(
-                        chat_id=aid,
-                        text="",
-                    )
-                except Exception as e:
-                    logger.warning("notify admin session: %s", e)
-        if removed_pending or sess:
-            await update.message.reply_text("Звернення скинуто.", reply_markup=markup_main)
+        if removed_pending:
+            await update.message.reply_text("Очікування заявки скасовано.", reply_markup=markup_main)
         else:
-            await update.message.reply_text("Немає активного звернення для завершення.", reply_markup=markup_main)
-        return
-
-    client_to_notify: int | None = None
-    for cid, s in list(sessions.items()):
-        if isinstance(s, dict) and s.get("admin_id") == uid:
-            client_to_notify = int(cid)
-            sessions.pop(cid, None)
-            break
-    if client_to_notify is not None:
-        try:
-            await context.bot.send_message(
-                chat_id=client_to_notify,
-                text="",
-                reply_markup=markup_main,
-            )
-        except Exception as e:
-            logger.exception("Клієнту після /finish адміна: %s", e)
-        await update.message.reply_text("Діалог із клієнтом завершено.")
+            await update.message.reply_text("Немає заявки в очікуванні для скасування.", reply_markup=markup_main)
         return
 
     await update.message.reply_text(
-        ""
+        "Переписка з клієнтами через цього бота не ведеться: /завершити або /finish."
     )
 
 
@@ -701,7 +355,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_flow(context)
     await update.message.reply_text(
         "Вітаємо! Оберіть розділ у меню нижче.\n\n"
-        "",
+        "Якщо заявка «зависла» в очікуванні: /завершити або /finish — скасувати очікування.",
         reply_markup=markup_main,
     )
 
@@ -714,91 +368,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def try_auto_claim_from_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Перший Reply адміна на пост AUTO_CLAIM — без inline-кнопок."""
-    msg = update.effective_message
-    if not msg or not msg.reply_to_message:
-        return False
-    admin_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    is_admin = admin_id in ADMIN_USER_IDS
-    is_in_admin_chat = chat_id == ADMIN_CHAT_ID
-    if not is_admin and not is_in_admin_chat:
-        return False
-    rid = msg.reply_to_message.message_id
-    pending_map: dict = context.bot_data.get(KEY_PENDING_TICKETS, {})
-    for tid, entry in list(pending_map.items()):
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("mode") != TICKET_MODE_AUTO_CLAIM:
-            continue
-        if entry.get("admin_msgs", {}).get(admin_id) != rid:
-            continue
-        pending_map.pop(tid, None)
-        client_id = int(entry["client_id"])
-        admin_msgs: dict[int, int] = entry["admin_msgs"]
-        html_text = entry["html"]
-        relay_bind_private(context.bot_data, admin_id, rid, client_id)
-        sessions = context.bot_data.setdefault(KEY_SUPPORT_SESSIONS, {})
-        sessions[client_id] = {
-            "admin_id": admin_id,
-            "ticket_id": tid,
-            "thread_with_buttons": False,
-        }
-        taken_footer = (
-            "\n\n"
-        )
-        for aid, mid in admin_msgs.items():
-            try:
-                if aid == admin_id:
-                    await context.bot.edit_message_text(
-                        chat_id=aid,
-                        message_id=mid,
-                        text=html_text + taken_footer,
-                        parse_mode="HTML",
-                        reply_markup=None,
-                        disable_web_page_preview=True,
-                    )
-                else:
-                    await context.bot.edit_message_text(
-                        chat_id=aid,
-                        message_id=mid,
-                        text=html_text + "\n\n<i></i>",
-                        parse_mode="HTML",
-                        reply_markup=None,
-                        disable_web_page_preview=True,
-                    )
-            except Exception as e:
-                logger.warning("Не вдалося оновити повідомлення %s/%s (auto-claim): %s", aid, mid, e)
-        try:
-            await context.bot.send_message(
-                chat_id=client_id,
-                text=(
-                    ""
-                ),
-                reply_markup=markup_main,
-            )
-        except Exception as e:
-            logger.exception("Клієнту після auto-claim: %s", e)
-        text_body = (msg.text or "").strip()
-        if text_body:
-            try:
-                await context.bot.send_message(
-                    chat_id=client_id,
-                    text=f"📩 Повідомлення від адміністратора:\n\n{text_body}",
-                    reply_markup=markup_main,
-                )
-            except Exception as e:
-                logger.exception("Relay після auto-claim: %s", e)
-        return True
-    return False
-
-
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     flow = current_flow(context)
     if flow not in (FLOW_TICKET_PHONE, FLOW_TICKET_PHONE_CONFIRM):
         await update.message.reply_text(
-            "",
+            "Зараз бот не очікує номер телефону. Оберіть тему в меню.",
             reply_markup=markup_main,
         )
         return
@@ -812,38 +386,6 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await finalize_ticket(update, context, contact.phone_number)
 
 
-async def handle_admin_private_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message or not update.message.reply_to_message:
-        return
-    uid = update.effective_user.id
-    cid = update.effective_chat.id
-    is_admin = uid in ADMIN_USER_IDS
-    is_in_admin_chat = cid == ADMIN_CHAT_ID
-    if not is_admin and not is_in_admin_chat:
-        return
-    rid = update.message.reply_to_message.message_id
-    key = relay_private_key(uid, rid)
-    client_id = context.bot_data.get(KEY_RELAY_PRIVATE, {}).get(key)
-    if client_id is None:
-        await try_auto_claim_from_reply(update, context)
-        return
-    text = update.message.text or ""
-    if not text.strip():
-        return
-    sess = context.bot_data.get(KEY_SUPPORT_SESSIONS, {}).get(client_id)
-    tid = sess.get("ticket_id", "") if isinstance(sess, dict) else ""
-    thread_buttons = isinstance(sess, dict) and sess.get("thread_with_buttons", True)
-    kb = end_only_keyboard(tid) if (tid and thread_buttons) else None
-    try:
-        await context.bot.send_message(
-            chat_id=client_id,
-            text=f"📩 Повідомлення від адміністратора:\n\n{text}",
-            reply_markup=kb,
-        )
-    except Exception as e:
-        logger.exception("Relay до користувача %s: %s", client_id, e)
-
-
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
     user = update.effective_user
@@ -852,37 +394,9 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if user.id in ADMIN_USER_IDS:
         await update.message.reply_text(
-            ""
-            ""
+            "Цей бот лише доставляє заявки з контактами клієнта. Напишіть клієнту напряму в Telegram "
+            "(@username, номер з заявки або посилання tg://user… у повідомленні заявки)."
         )
-        return
-
-    sess = context.bot_data.get(KEY_SUPPORT_SESSIONS, {}).get(user.id)
-    if isinstance(sess, dict) and sess.get("admin_id"):
-        thread_buttons = sess.get("thread_with_buttons", True)
-        if text in MENU_LABELS:
-            via_btn = ", кнопка «Завершити звернення»" if thread_buttons else ""
-            await update.message.reply_text(
-                ""
-                f"{via_btn}), потім знову зможете користуватися меню."
-            )
-            return
-        admin_id = sess["admin_id"]
-        ticket_id = sess.get("ticket_id", "")
-        line = f"💬 Повідомлення від клієнта:\n\n{text}"
-        reply_kb = end_only_keyboard(ticket_id) if (ticket_id and thread_buttons) else None
-        try:
-            m = await context.bot.send_message(
-                chat_id=admin_id,
-                text=line,
-                reply_markup=reply_kb,
-            )
-            relay_bind_private(context.bot_data, admin_id, m.message_id, user.id)
-        except Exception as e:
-            logger.exception("Пересилання адміну: %s", e)
-            await update.message.reply_text("Не вдалося передати повідомлення. Спробуйте пізніше.")
-            return
-        await update.message.reply_text("Повідомлення передано адміністратору.", reply_markup=markup_main)
         return
 
     flow = current_flow(context)
@@ -977,35 +491,6 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    if flow == FLOW_LIVE_REQUEST:
-        if text in MENU_LABELS:
-            await update.message.reply_text(
-                "Надішліть одне текстове повідомлення зі змістом звернення або натисніть /cancel."
-            )
-            return
-        if not is_appeal_text_valid(text):
-            await update.message.reply_text(
-                f"Опишіть звернення детальніше: не менше {MIN_APPEAL_TEXT_LENGTH} символів "
-                f"(зараз {len(text)}). Або /cancel."
-            )
-            return
-        await finalize_live_request(update, context, text)
-        return
-
-    if text == BTN_LIVE_ADMIN:
-        if current_flow(context) not in (FLOW_IDLE, ""):
-            await update.message.reply_text(
-                "Спочатку завершіть поточний крок або натисніть /cancel, щоб почати спочатку."
-            )
-            return
-        context.user_data[KEY_FLOW] = FLOW_LIVE_REQUEST
-        await update.message.reply_text(
-            "Опишіть одним повідомленням, з якого питання потрібна допомога адміністратора. "
-            "Меню зникло з екрана, щоб не заважати набору тексту.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return
-
     if text == "Правова допомога":
         await update.message.reply_text("Оберіть вид правової допомоги:", reply_markup=markup_services)
 
@@ -1031,8 +516,8 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         info_text = (
             "🤖 <b>Що вміє цей бот</b>\n"
             "• показує меню послуг та довідкову інформацію;\n"
-            "• приймає звернення й передає їх адміністраторам у приватні чати з ботом;\n"
-            "• доставляє вам відповідь адміністратора в цей чат;\n"
+            "• приймає звернення й передає їх адміністраторам (приватно та/або у групу — залежно від налаштувань);\n"
+            "• у заявці вказані контакти для зв'язку з вами поза цим чатом;\n"
             "• за потреби може працювати з електронною поштою (якщо це налаштовано на сервері)."
         )
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=markup_main)
@@ -1135,12 +620,21 @@ def build_application():
     if not BOT_TOKEN:
         raise SystemExit(
             "Не знайдено BOT_TOKEN. Додайте його в .env (і збережіть файл) або в оточення: "
-            "BOT_TOKEN=... ADMIN_USER_IDS=id1,id2"
+            "BOT_TOKEN=... ADMIN_USER_IDS=id1,id2 (або TARGET_CHAT_ID для групи)"
         )
-    if not ADMIN_USER_IDS:
-        logger.warning("ADMIN_USER_IDS порожній — звернення до адміністраторів не доставлятимуться.")
-    if ADMIN_CHAT_ID != 0:
-        logger.info("TARGET_CHAT_ID задано — звернення також надсилатимуться в цю групу.")
+    if not _admin_delivery_configured():
+        logger.warning(
+            "Не задано ADMIN_USER_IDS і TARGET_CHAT_ID — заявки клієнтам не доставлятимуться."
+        )
+    elif not ADMIN_USER_IDS and ADMIN_CHAT_ID:
+        logger.info(
+            "ADMIN_USER_IDS порожній — копія заявок лише в групу TARGET_CHAT_ID (лише для перегляду). "
+            "Приватні адміни — через ADMIN_USER_IDS."
+        )
+    elif ADMIN_USER_IDS and ADMIN_CHAT_ID:
+        logger.info(
+            "Звернення: приватним адмінам і копія в групу TARGET_CHAT_ID (лише для перегляду)."
+        )
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -1156,25 +650,12 @@ def build_application():
         )
     )
 
-    application.add_handler(CallbackQueryHandler(handle_callback, pattern=r"^(claim|close):"))
-
     application.add_handler(
         MessageHandler(
             filters.CONTACT & filters.ChatType.PRIVATE,
             handle_contact,
         )
     )
-
-    if ADMIN_USER_IDS or ADMIN_CHAT_ID:
-        application.add_handler(
-            MessageHandler(
-                (filters.User(user_id=ADMIN_USER_IDS) | filters.Chat(chat_id=ADMIN_CHAT_ID))
-                & filters.REPLY
-                & filters.TEXT
-                & ~filters.COMMAND,
-                handle_admin_private_reply,
-            )
-        )
 
     application.add_handler(
         MessageHandler(

@@ -63,7 +63,7 @@ def test_build_ticket_admin_html_contains_blocks(utils):
     assert "Категорія X" in html
     assert "<b>нежирний</b>" not in html or "&lt;b&gt;" in html
     assert "Телефон" in html
-    assert "відповісти" in html.lower()
+    assert "зв'яжіться" in html.lower()
 
 
 def test_build_ticket_admin_html_no_phone(utils):
@@ -71,12 +71,6 @@ def test_build_ticket_admin_html_no_phone(utils):
     assert "НОВА ЗАЯВКА" in html
     assert "📱" not in html
     assert "Питання" in html
-
-
-def test_build_live_request_admin_html(utils):
-    html = utils.build_live_request_admin_html(3, "Клиент", None, "Допоможіть")
-    assert "ЗВЕРНЕННЯ ДО АДМІНІСТРАТОРА" in html
-    assert "Допоможіть" in html
 
 
 def test_services_list_in_menu_labels(utils):
@@ -90,9 +84,8 @@ def test_flow_constants_distinct(utils):
         utils.FLOW_TICKET_TEXT,
         utils.FLOW_TICKET_PHONE,
         utils.FLOW_TICKET_PHONE_CONFIRM,
-        utils.FLOW_LIVE_REQUEST,
     }
-    assert len(flows) == 5
+    assert len(flows) == 4
 
 
 def test_confirm_yes_no(utils):
@@ -122,7 +115,9 @@ def test_reload_bot_clean_build_application(monkeypatch):
     monkeypatch.setenv("TARGET_CHAT_ID", "-1001234567890")
     monkeypatch.setenv("ADMIN_USER_IDS", "1001,1002")
     import bot_clean
+    import bot_config
 
+    importlib.reload(bot_config)
     importlib.reload(bot_clean)
     app = bot_clean.build_application()
     assert app is not None
@@ -133,7 +128,9 @@ def test_build_application_exits_without_token(monkeypatch):
     monkeypatch.delenv("BOT_TOKEN", raising=False)
     monkeypatch.setenv("BOT_TOKEN", "")
     import bot_clean
+    import bot_config
 
+    importlib.reload(bot_config)
     importlib.reload(bot_clean)
     with pytest.raises(SystemExit):
         bot_clean.build_application()
@@ -181,18 +178,3 @@ def test_register_ticket_admin_post_binds_and_returns_html(utils):
     assert "НОВА ЗАЯВКА" in html
     assert "Текст" in html
 
-
-def test_register_live_request_admin_post_binds_and_returns_html(utils):
-    bot_data: dict = {}
-    html = utils.register_live_request_admin_post(
-        bot_data,
-        99,
-        relay_admin_id=11,
-        user_id=3,
-        full_name="U",
-        username="u",
-        body="Допомога",
-    )
-    assert bot_data[utils.KEY_RELAY_PRIVATE]["11:99"] == 3
-    assert "ЗВЕРНЕННЯ ДО АДМІНІСТРАТОРА" in html
-    assert "Допомога" in html
