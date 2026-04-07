@@ -79,7 +79,7 @@ from bot_utils import (
 
 # --- КОНФИГУРАЦИЯ ---
 BOT_TOKEN = '8283530471:AAFsFFhFB9gfzGKVbZztDIYe9sDsOGWsBEg'
-TARGET_CHAT_ID = '-1003791029029'  # ID чата, куда бот будет пересылать сообщения (пример)
+TARGET_CHAT_ID = '-1003791029029'  # ID чата, куда бот будет пересылать сообщения
 try:
     ADMIN_CHAT_ID = int(TARGET_CHAT_ID)
 except ValueError:
@@ -279,8 +279,10 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not q or not q.data:
         return
     ticket_id = q.data.split(":", 1)[1]
-    if q.from_user.id not in ADMIN_USER_IDS:
-        await q.answer("Доступ лише для адміністраторів.", show_alert=True)
+    is_admin = q.from_user.id in ADMIN_USER_IDS
+    is_in_admin_chat = q.message and q.message.chat_id == ADMIN_CHAT_ID
+    if not is_admin and not is_in_admin_chat:
+        await q.answer("Доступ лише для адміністраторів або учасників робочої групи.", show_alert=True)
         return
     pending_map: dict = context.bot_data.get(KEY_PENDING_TICKETS, {})
     entry = pending_map.get(ticket_id)
@@ -409,7 +411,9 @@ async def handle_close(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         client_id = entry["client_id"]
         admin_msgs = entry["admin_msgs"]
         html_text = entry["html"]
-        if uid != client_id and uid not in ADMIN_USER_IDS:
+        is_admin = uid in ADMIN_USER_IDS
+        is_in_admin_chat = q.message and q.message.chat_id == ADMIN_CHAT_ID
+        if uid != client_id and not is_admin and not is_in_admin_chat:
             await q.answer("Немає прав завершити це звернення.", show_alert=True)
             return
         del pending_map[ticket_id]
@@ -623,7 +627,9 @@ async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pending_map: dict = context.bot_data.setdefault(KEY_PENDING_TICKETS, {})
     sessions: dict = context.bot_data.setdefault(KEY_SUPPORT_SESSIONS, {})
 
-    if uid not in ADMIN_USER_IDS:
+    is_admin = uid in ADMIN_USER_IDS
+    is_in_admin_chat = update.effective_chat.id == ADMIN_CHAT_ID
+    if not is_admin and not is_in_admin_chat:
         removed_pending = [
             tid for tid, e in list(pending_map.items()) if isinstance(e, dict) and e.get("client_id") == uid
         ]
@@ -714,6 +720,11 @@ async def try_auto_claim_from_reply(update: Update, context: ContextTypes.DEFAUL
     if not msg or not msg.reply_to_message:
         return False
     admin_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    is_admin = admin_id in ADMIN_USER_IDS
+    is_in_admin_chat = chat_id == ADMIN_CHAT_ID
+    if not is_admin and not is_in_admin_chat:
+        return False
     rid = msg.reply_to_message.message_id
     pending_map: dict = context.bot_data.get(KEY_PENDING_TICKETS, {})
     for tid, entry in list(pending_map.items()):
@@ -805,7 +816,10 @@ async def handle_admin_private_reply(update: Update, context: ContextTypes.DEFAU
     if not update.message or not update.message.reply_to_message:
         return
     uid = update.effective_user.id
-    if uid not in ADMIN_USER_IDS:
+    cid = update.effective_chat.id
+    is_admin = uid in ADMIN_USER_IDS
+    is_in_admin_chat = cid == ADMIN_CHAT_ID
+    if not is_admin and not is_in_admin_chat:
         return
     rid = update.message.reply_to_message.message_id
     key = relay_private_key(uid, rid)
@@ -1151,10 +1165,10 @@ def build_application():
         )
     )
 
-    if ADMIN_USER_IDS:
+    if ADMIN_USER_IDS or ADMIN_CHAT_ID:
         application.add_handler(
             MessageHandler(
-                filters.User(user_id=ADMIN_USER_IDS)
+                (filters.User(user_id=ADMIN_USER_IDS) | filters.Chat(chat_id=ADMIN_CHAT_ID))
                 & filters.REPLY
                 & filters.TEXT
                 & ~filters.COMMAND,
