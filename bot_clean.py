@@ -57,9 +57,7 @@ def _admin_delivery_configured() -> bool:
 
 # Текст додається лише до повідомлення в групі: без кнопок і без relay з групи.
 GROUP_TICKET_INFO_FOOTER = (
-    "\n\n<i>ℹ️ Зв'яжіться з клієнтом через @username, "
-    "номер телефону в заявці або посилання «tg://user…» у блоці вище. "
-    "</i>"
+    "\n\n"
 )
 
 
@@ -158,10 +156,10 @@ markup_phone = ReplyKeyboardMarkup(
 
 # Текст клієнту після успішної відправки (зв'язок лише поза ботом — за контактами в заявці)
 _CLIENT_CONTACT_AFTER_SUBMIT = (
-    "З вами зв'яжуться самостійно за Вашими контактами з заявки"
+    ""
     ""
 )
-CLIENT_TICKET_SENT_MESSAGE = "Дякуємо! Заявку передано адміністраторам.\n\n" + _CLIENT_CONTACT_AFTER_SUBMIT
+CLIENT_TICKET_SENT_MESSAGE = "Ваше повідомлення відправлено! Ми зв'яжемося з вами. ✅\n\n" + _CLIENT_CONTACT_AFTER_SUBMIT
 
 
 def send_email(subject, body, to_email):
@@ -251,7 +249,7 @@ async def finalize_ticket(
     user = update.effective_user
     if user and _client_has_open_support(context, user.id):
         await update.effective_message.reply_text(
-            "У вас уже є заявка в очікуванні. Скасуйте її: /завершити або /finish, або /cancel — і надішліть нову.",
+            "У вас уже є заявка в очікуванні. Скасуйте її: натисніть -> /finish, або /cancel — і надішліть нову.",
             reply_markup=markup_main,
         )
         return
@@ -336,7 +334,7 @@ async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     try:
                         await context.bot.send_message(
                             chat_id=aid,
-                            text="Клієнт скасував очікування звернення (/завершити або /finish).",
+                            text="Клієнт скасував звернення (/завершити або /finish).",
                         )
                     except Exception as e:
                         logger.warning("notify admin: %s", e)
@@ -347,7 +345,7 @@ async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await update.message.reply_text(
-        "Переписка з клієнтами через цього бота не ведеться: /завершити або /finish."
+        "Переписка з клієнтами через бота не ведеться: /завершити або /finish."
     )
 
 
@@ -355,7 +353,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_flow(context)
     await update.message.reply_text(
         "Вітаємо! Оберіть розділ у меню нижче.\n\n"
-        "Якщо заявка «зависла» в очікуванні: /завершити або /finish — скасувати очікування.",
+        "Якщо заявка «зависла» в очікуванні: натисніть -> /finish ",
         reply_markup=markup_main,
     )
 
@@ -394,8 +392,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if user.id in ADMIN_USER_IDS:
         await update.message.reply_text(
-            "Цей бот лише доставляє заявки з контактами клієнта. Напишіть клієнту напряму в Telegram "
-            "(@username, номер з заявки або посилання tg://user… у повідомленні заявки)."
+            ""
         )
         return
 
@@ -404,13 +401,13 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if flow == FLOW_TICKET_TEXT:
         if text in MENU_LABELS:
             await update.message.reply_text(
-                "Опишіть ситуацію одним звичайним повідомленням (текстом). Кнопки меню тут не підходять — або натисніть /cancel.",
+                "Опишіть ситуацію одним звичайним повідомленням (текстом). Кнопки меню тут не підходять —> або натисніть /cancel.",
             )
             return
         if not is_appeal_text_valid(text):
             await update.message.reply_text(
                 f"Опишіть ситуацію детальніше: не менше {MIN_APPEAL_TEXT_LENGTH} символів у повідомленні "
-                f"(зараз {len(text)}). Або /cancel."
+                f"(зараз {len(text)}). Або якщо щось не так, натисніть -> /cancel."
             )
             return
         draft = context.user_data.setdefault(KEY_TICKET_DRAFT, {})
@@ -421,10 +418,10 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data[KEY_FLOW] = FLOW_TICKET_PHONE
             await update.message.reply_text(
                 "У вашому профілі Telegram немає публічного нікнейму (@username).\n\n"
-                "Вкажіть номер телефону для зворотного зв'язку:\n"
+                "Будь ласка вкажіть номер телефону для зворотного зв'язку:\n"
                 "• натисніть «Надіслати свій номер»;\n"
                 "• або введіть номер: 0XXXXXXXXX чи +380XXXXXXXXX.\n\n"
-                "Після введення номера вручну бот попросить підтвердити його (так / ні). Скасувати заявку: кнопка нижче або /cancel.",
+                "Після введення номера вручну бот попросить підтвердити його (так / ні). Скасувати заявку: натисніть -> /cancel.",
                 reply_markup=markup_phone,
             )
         return
@@ -500,7 +497,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         safe = escape_html(text)
         await update.message.reply_text(
             f"Обрано тему: <b>{safe}</b>.\n\n"
-            f"Опишіть ситуацію <b>одним повідомленням</b>. За бажання вкажіть у цьому ж тексті номер телефону для зворотного дзвінка.",
+            f"Опишіть ситуацію <b>одним повідомленням</b>. За можливості вкажіть у цьому ж тексті номер телефону для зворотного звʼзку.",
             parse_mode="HTML",
             reply_markup=ReplyKeyboardRemove(),
         )
@@ -516,9 +513,9 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         info_text = (
             "🤖 <b>Що вміє цей бот</b>\n"
             "• показує меню послуг та довідкову інформацію;\n"
-            "• приймає звернення й передає їх адміністраторам (приватно та/або у групу — залежно від налаштувань);\n"
-            "• у заявці вказані контакти для зв'язку з вами поза цим чатом;\n"
-            "• за потреби може працювати з електронною поштою (якщо це налаштовано на сервері)."
+            "• приймає звернення й передає їх адміністраторам;\n"
+            "\n"
+            ""
         )
         await update.message.reply_text(info_text, parse_mode="HTML", reply_markup=markup_main)
 
