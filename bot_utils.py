@@ -118,9 +118,9 @@ def format_user_line_html(user_id: int, full_name: str, username: Optional[str])
         un = escape_html(username)
         lines.append(f"🔗 @{un} — <a href=\"https://t.me/{username}\">t.me/{un}</a>")
     else:
-        lines.append("⚠️ У профілі немає публічного нікнейму (@username)")
+        lines.append("\n\n⚠️ У профілі немає публічного нікнейму (@username)")
         lines.append(
-            f"🔗 <a href=\"tg://user?id={user_id}\">Посилання для зв'язку в Telegram (якщо клієнт це дозволяє)</a>"
+            f"\n\n🔗 <a href=\"tg://user?id={user_id}\">Посилання для зв'язку в Telegram</a>"
         )
     lines.append(f"🆔 ID: <code>{user_id}</code>")
     return "\n".join(lines)
@@ -155,7 +155,7 @@ def build_ticket_admin_html(
     body_esc = escape_html(body)
     cat_esc = escape_html(category)
     parts = [
-        f"📩 <b>НОВА ЗАЯВКА: {cat_esc}</b>",
+        f"📩 <b>НОВА ЗАЯВКА: \n\n{cat_esc}</b>",
         "",
         user_block,
         "",
@@ -167,8 +167,6 @@ def build_ticket_admin_html(
     parts.extend(
         [
             "",
-            "📋 Зв'яжіться з клієнтом за контактами в блоці вище (@username, телефон у заявці або посилання tg://user…). "
-            "Переписка через цього бота не ведеться.",
         ]
     )
     return "\n".join(parts)
