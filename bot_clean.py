@@ -352,8 +352,8 @@ async def cmd_finish_support(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     clear_flow(context)
     await update.message.reply_text(
-        "Вітаємо! Оберіть розділ у меню нижче.\n\n"
-        "Якщо заявка «зависла» в очікуванні: натисніть -> /finish ",
+        "Вітаємо! Оберіть розділ у меню нижче."
+        "",
         reply_markup=markup_main,
     )
 
