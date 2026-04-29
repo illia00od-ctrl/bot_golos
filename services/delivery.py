@@ -61,7 +61,8 @@ async def finalize_ticket(
     draft = context.user_data.get(KEY_TICKET_DRAFT) or {}
     
     category = draft.get("service_name", "Загальне питання")
-    body = draft.get("message", "")
+    # Екрануємо основне повідомлення
+    body = escape_html(draft.get("message", ""))
     
     # Збираємо відповіді на додаткові питання разом із самими питаннями
     from bot_utils import SERVICE_QUESTIONS
@@ -73,9 +74,12 @@ async def finalize_ticket(
             try:
                 idx = int(k.replace("answer_", ""))
                 q_text = questions[idx] if idx < len(questions) else f"Питання {idx+1}"
-                q_formatted.append(f"<b>Q:</b> {q_text}\n<b>A:</b> {v}")
+                # Екрануємо відповідь користувача
+                v_esc = escape_html(str(v))
+                q_formatted.append(f"<b>Q:</b> {q_text}\n<b>A:</b> {v_esc}")
             except (ValueError, IndexError):
-                q_formatted.append(f"<b>A:</b> {v}")
+                v_esc = escape_html(str(v))
+                q_formatted.append(f"<b>A:</b> {v_esc}")
     
     if q_formatted:
         body = "<b>Додаткові запитання:</b>\n" + "\n\n".join(q_formatted) + "\n\n<b>Опис ситуації:</b>\n" + body

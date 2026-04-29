@@ -14,6 +14,19 @@ def main_markup():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+def discounts_markup():
+    keyboard = [
+        [KeyboardButton("🏎️ Паркування"), KeyboardButton("🍔 Кафе та ресторани")],
+        [KeyboardButton("🧸 Дитячі товари"), KeyboardButton("⛽ Паливо")],
+        [KeyboardButton("🏨 Готелі"), KeyboardButton("👕 Одяг та аксесуари")],
+        [KeyboardButton("👨‍⚕️ Медичні послуги"), KeyboardButton("📽️ Дозвілля")],
+        [KeyboardButton("🛠️ Товари для дому"), KeyboardButton("🍜 Продукти харчування")],
+        [KeyboardButton("👶 Для дітей"), KeyboardButton("💪 Спорт та зали")],
+        [KeyboardButton("✂️ Послуги"), KeyboardButton("💐 Інше (Знижки)")],
+        [KeyboardButton("⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 def services_markup():
     keyboard = [
         [KeyboardButton("📄 Статус УБД/інвалідність внаслідок війни")],

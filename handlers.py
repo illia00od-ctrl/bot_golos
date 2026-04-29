@@ -2,8 +2,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from bot_utils import SERVICES_LIST, KEY_FLOW
 from services.ticket import start_service_flow, process_ticket_logic, clear_flow
-from utils.markup import main_markup, services_markup, health_markup, phone_markup
+from utils.markup import main_markup, services_markup, health_markup, phone_markup, discounts_markup
 from bot_utils import KEY_TICKET_DRAFT, FLOW_TICKET_PHONE, FLOW_TICKET_PHONE_CONFIRM
+from utils.discounts_data import DISCOUNTS_DATA
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await clear_flow(context)
@@ -36,8 +37,27 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Повертаємось до головного меню.", reply_markup=main_markup())
         return
 
-    if text == "🛒 Знижки для захисників в місті Одеса" or text == "❓ Інше":
+    if text == "🛒 Знижки для захисників в місті Одеса":
+        await update.message.reply_text("Оберіть категорію знижок:", reply_markup=discounts_markup())
+        return
+
+    if text == "❓ Інше":
         await start_service_flow(update, context, text)
+        return
+
+    if text in ["🏸 Більярд", "🏓 Настільний теніс", "🏹 Стрільба з лука", "🤾 Піклбол"]:
+        await update.message.reply_text(
+            f"Розклад і деталі — у каналі адаптивного спорту:\nhttps://t.me/adaptivesportOD",
+            reply_markup=health_markup()
+        )
+        return
+
+    if text in DISCOUNTS_DATA:
+        await update.message.reply_text(
+            DISCOUNTS_DATA[text],
+            parse_mode="HTML",
+            reply_markup=discounts_markup()
+        )
         return
 
     if text in SERVICES_LIST:
