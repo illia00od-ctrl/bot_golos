@@ -10,8 +10,6 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
-from bot_utils import parse_admin_user_ids
-
 _ROOT = Path(__file__).resolve().parent
 _ENV_FILE = _ROOT / ".env"
 
@@ -41,7 +39,6 @@ load_dotenv_if_present()
 @dataclass(frozen=True)
 class BotConfig:
     bot_token: str
-    admin_user_ids: tuple[int, ...]
     admin_chat_id: int
     smtp_server: str
     smtp_port: int
@@ -58,18 +55,21 @@ def build_config(environ: dict[str, str] | None = None) -> BotConfig:
         admin_chat_id = int(raw_target) if raw_target else 0
     except ValueError:
         admin_chat_id = 0
-    ids = parse_admin_user_ids(env.get("ADMIN_USER_IDS", ""))
+    raw_smtp_port = (env.get("SMTP_PORT") or "587").strip()
+    try:
+        smtp_port = int(raw_smtp_port)
+    except ValueError:
+        smtp_port = 587
     return BotConfig(
         bot_token=token,
-        admin_user_ids=tuple(ids),
         admin_chat_id=admin_chat_id,
         smtp_server=env.get("SMTP_SERVER", "smtp.gmail.com"),
-        smtp_port=int(env.get("SMTP_PORT", "587")),
+        smtp_port=smtp_port,
         smtp_user=env.get("SMTP_USER", ""),
         smtp_password=env.get("SMTP_PASSWORD", ""),
     )
 
 
 def admin_delivery_configured(cfg: BotConfig) -> bool:
-    """Є куди доставити заявку: приватні адміни і/або група."""
-    return bool(cfg.admin_user_ids) or bool(cfg.admin_chat_id)
+    """Є куди доставити заявку: тільки група."""
+    return bool(cfg.admin_chat_id)

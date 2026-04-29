@@ -63,7 +63,7 @@ def test_build_ticket_admin_html_contains_blocks(utils):
     assert "Категорія X" in html
     assert "<b>нежирний</b>" not in html or "&lt;b&gt;" in html
     assert "Телефон" in html
-    assert "зв'яжіться" in html.lower()
+    assert "Текст звернення" in html
 
 
 def test_build_ticket_admin_html_no_phone(utils):
@@ -113,7 +113,6 @@ def test_build_ticket_escapes_xss_in_category_and_body(utils):
 def test_reload_bot_clean_build_application(monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", "123456:FAKE_TOKEN_FOR_TEST")
     monkeypatch.setenv("TARGET_CHAT_ID", "-1001234567890")
-    monkeypatch.setenv("ADMIN_USER_IDS", "1001,1002")
     import bot_clean
     import bot_config
 
